@@ -1,7 +1,7 @@
 /* -------------------------------- Includes -------------------------------- */
 #include <ctype.h> /* iscntrl() */
 #include <errno.h> /* errno */
-#include <stdio.h> /* perror(), sscanf() */
+#include <stdio.h> /* perror(), sscanf(), snprintf() */
 #include <stdlib.h> /* atexit(), exit(), realloc(), free() */
 #include <string.h> /* memcpy() */
 #include <sys/ioctl.h> /* ioctl() */
@@ -9,6 +9,7 @@
 #include <unistd.h> /* read(), write() */
 
 /* --------------------------------- Defines -------------------------------- */
+#define KILO_VERSION "0.01"
 #define CTRL_KEY(k) ((k) & 0x1F) /* For mapping CTRL key combinations */
 #define CURSOR_BOTTOM_RIGHT "\x1b[999C\x1b[999B"
 
@@ -201,28 +202,68 @@ void editor_process_keypress(void) {
 }
 
 /* --------------------------------- Output --------------------------------- */
-void editor_draw_rows(void) {
-    for (uint8_t i = 0; i < E.rows; i++) {
-        write(STDOUT_FILENO, "~", 1);
-        if (i < E.rows - 1) {
-            write(STDOUT_FILENO, "\r\n", 2);
+void editor_draw_rows(struct abuf *ab) {
+    char col[8] = "";
+    char debug[120] = "";
+    char welcome[80] = "";
+    int col_length;
+    int welcome_length;
+    int debug_length;
+    int padding;
+
+    for (uint8_t y = 0; y < E.rows; y++) {
+        /* Clear each row as we write to them */
+        ab_append(ab, "\x1b[K", 3);
+
+        col_length = snprintf(col, sizeof(col), "%d ", y);
+        ab_append(ab, col, col_length);
+
+        if (y == 0) { // y == E.rows / 3)
+            welcome_length = snprintf(welcome, sizeof(welcome), "Kilo editor -- Version %s", KILO_VERSION);
+            /* Truncate welcome message if window width too thin. */
+            if (welcome_length > E.cols) {
+                welcome_length = E.cols;
+            }
+            /* Divide window length by 2, then subtract half of message's length (from that half-length). */
+            padding = (E.cols - welcome_length) / 2;
+  
+            while (padding) {
+                ab_append(ab, " ", 1);
+                padding--;
+            }
+            ab_append(ab, welcome, welcome_length);
+        } else {
+            // ab_append(ab, "~", 1);
+        }
+
+        if (y < E.rows - 1) {
+            ab_append(ab, "\r\n", 2);
+       } else { // print debug info on last line 
+            debug_length = snprintf(debug, sizeof(debug), "E.rows = %d, E.cols = %d", E.rows, E.cols);
+            ab_append(ab, debug, debug_length);
        }
     }
 }
 
 void editor_refresh_screen(void) {
-    /* Write 4 byte escape sequence to terminal.
-    \x1b (decimal 27) = escape character
-    2J = clear entire screen
-    */
-    write(STDOUT_FILENO, "\x1b[2J", 4);
+    struct abuf ab = ABUF_INIT;
+
+    /* Hide cursor */
+    ab_append(&ab, "\x1b[?25l", 6);
+
     /* Reposition curser to top-left corner of terminal 
     H = Resposition cursor. Default args are 1;1 (first column, first row).
     */
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    ab_append(&ab, "\x1b[H", 3);
     /* Draw tildes at start of first 24 lines (terminal size TBD) and reposition cursor. */
-    editor_draw_rows();
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    editor_draw_rows(&ab);
+    ab_append(&ab, "\x1b[H", 3);
+
+    /* Show cursor */
+    ab_append(&ab, "\x1b[?25l", 6);
+
+    write(STDOUT_FILENO, ab.str, ab.length);
+    ab_free(&ab);
 }
 
 /* ---------------------------------- Init ---------------------------------- */
