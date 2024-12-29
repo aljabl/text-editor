@@ -152,6 +152,33 @@ int get_window_size(int *rows, int *cols) {
     return 0;
 }
 
+/* ------------------------------ Append Buffer ----------------------------- */
+struct abuf {
+    char *str;
+    uint length;
+};
+
+#define ABUF_INIT {NULL, 0} // constructor for append buffer
+
+void ab_append(struct abuf *ab, const char *s, int length) {
+    /* Allocate memory: size of existing buff plus size of string to be appended. */
+    char *new_buff = realloc(ab->str, ab->length + length);
+
+    if (new_buff == NULL) {
+        return;
+    }
+
+    /* make sure we don't have a memory leak here */
+    memcpy(&new_buff[ab->length], s, length);
+    ab->str = new_buff;
+    ab->length += length;
+}
+
+/* Destructor */
+void ab_free(struct abuf *ab) {
+    free(ab->str);
+}
+
 /* ---------------------------------- Input --------------------------------- */
 
 void editor_process_keypress(void) {
