@@ -1,21 +1,30 @@
 /* -------------------------------- Includes -------------------------------- */
 #include <ctype.h> /* iscntrl() */
 #include <errno.h> /* errno */
-#include <stdio.h> /* perror() */
-#include <stdlib.h> /* atexit(), exit() */
-#include <string.h>
+#include <stdio.h> /* perror(), sscanf() */
+#include <stdlib.h> /* atexit(), exit(), realloc(), free() */
+#include <string.h> /* memcpy() */
+#include <sys/ioctl.h> /* ioctl() */
 #include <termios.h> /* tcgetattr(), tcsetattr() */
 #include <unistd.h> /* read(), write() */
 
 /* --------------------------------- Defines -------------------------------- */
 #define CTRL_KEY(k) ((k) & 0x1F) /* For mapping CTRL key combinations */
+#define CURSOR_BOTTOM_RIGHT "\x1b[999C\x1b[999B"
 
 /* ------------------------------- Declarations ------------------------------ */
 void restore_term(void);
+void editor_process_keypress(void);
 
 /* ---------------------------------- Data ---------------------------------- */
-// TODO: limit use of globals
-struct termios orig_term;
+/* Editor state is global. */
+struct editor_config {
+    int rows;
+    int cols;
+    struct termios orig_term;
+};
+
+struct editor_config E;
 
 /* -------------------------------- Terminal -------------------------------- */
 void error_handler(const char *s) {
@@ -31,18 +40,18 @@ void init_term(void) {
     struct termios raw_term;
 
     // Get attributes of current (original) terminal.
-    if (tcgetattr(STDIN_FILENO, &orig_term) == -1) {
+    if (tcgetattr(STDIN_FILENO, &E.orig_term) == -1) {
         error_handler("tcgetattr");
     }
 
-    atexit(restore_term); // can also not do this and keep orig_term as local. we'd pass orig_term to restore_term.
+    atexit(restore_term); 
 
     /*
     Enable raw mode on new terminal. Disable echoing (can't see what we type as we type) and canonical mode (read input
     byte-by-byte) instead of line-by-line. We process each keypress as it occurs, instead of processing when the user
     hits `Enter` canonical mode).
     */
-    raw_term = orig_term;
+    raw_term = E.orig_term;
     /*
     OUTPUT FLAGS
         OPOST: output processing features
@@ -81,7 +90,7 @@ void init_term(void) {
 
 void restore_term(void) {
     printf("Restoring original terminal.\r\n");
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_term) == -1) {
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_term) == -1) {
         error_handler("tcsetattr");
     }
 }
@@ -98,11 +107,55 @@ char editor_read_key(void) {
     return c;
 }
 
+int get_cursor_position(int *rows, int *cols) {
+    char buffer[32]; 
+    uint8_t i = 0;
+    
+    /* Request cursor position. */
+    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) {
+        return -1;
+    }
+    /* Read response into buffer: ESC [ Pn ; Pn R */
+    while (i < sizeof(buffer) - 1) {
+        buffer[i] = editor_read_key();
+        if (buffer[i] == 'R') {
+            break;
+        }
+        i++;
+    }
+    buffer[i] = '\0';
+    printf("buffer: %s\r\n", &buffer[1]);
+
+    if (buffer[0] != '\x1b' || buffer[1] != '[') {
+        return -1;
+    }
+    if (sscanf(&buffer[2], "%d;%d", rows, cols) != 2) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int get_window_size(int *rows, int *cols) {
+    struct winsize ws;
+
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+        if (write(STDOUT_FILENO, CURSOR_BOTTOM_RIGHT, 12) != 12) {
+            return -1;
+        }
+        /* Get window size the hard way if ioctl() fails. */
+        return get_cursor_position(rows, cols);
+    } 
+    *rows = ws.ws_row;
+    *cols = ws.ws_col;
+
+    return 0;
+}
+
 /* ---------------------------------- Input --------------------------------- */
 
 void editor_process_keypress(void) {
     char c = editor_read_key();
-
     /* CTRL key combination mapping */
     switch(c) {
         case CTRL_KEY('q'):
@@ -110,7 +163,7 @@ void editor_process_keypress(void) {
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
-            break; // chris is judging this 
+            break;
         default:
             if (iscntrl(c)) { /* Check if c is a control character (nonprintable character) */
                 printf("%d\r\n", c);
@@ -121,6 +174,15 @@ void editor_process_keypress(void) {
 }
 
 /* --------------------------------- Output --------------------------------- */
+void editor_draw_rows(void) {
+    for (uint8_t i = 0; i < E.rows; i++) {
+        write(STDOUT_FILENO, "~", 1);
+        if (i < E.rows - 1) {
+            write(STDOUT_FILENO, "\r\n", 2);
+       }
+    }
+}
+
 void editor_refresh_screen(void) {
     /* Write 4 byte escape sequence to terminal.
     \x1b (decimal 27) = escape character
@@ -131,11 +193,22 @@ void editor_refresh_screen(void) {
     H = Resposition cursor. Default args are 1;1 (first column, first row).
     */
     write(STDOUT_FILENO, "\x1b[H", 3);
+    /* Draw tildes at start of first 24 lines (terminal size TBD) and reposition cursor. */
+    editor_draw_rows();
+    write(STDOUT_FILENO, "\x1b[H", 3);
 }
 
 /* ---------------------------------- Init ---------------------------------- */
+/* Initialize fields in E struct (global editor state). */
+void init_editor(void) {
+    if (get_window_size(&E.rows, &E.cols) == -1) {
+        error_handler("get_window_size");
+    }
+}
+
 int main(void) {
     init_term();
+    init_editor();
     while(1) {
         editor_refresh_screen();
         editor_process_keypress();
