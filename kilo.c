@@ -11,6 +11,13 @@
 /* --------------------------------- Defines -------------------------------- */
 #define KILO_VERSION "0.01"
 #define CTRL_KEY(k) ((k) & 0x1F) /* For mapping CTRL key combinations */
+
+/* Escape sequences */
+#define CLEAR_SCREEN "\x1b[2J"
+#define CURSOR_POSITION_REQUEST "\x1b[6n"
+#define CURSOR_REPOSITION "\x1b[H" /* Default args are 1;1 (first col, first row) --> top-left corner. */
+#define CURSOR_HIDE "\x1b[?25l"
+#define CURSOR_SHOW "\x1b[?25h"
 #define CURSOR_BOTTOM_RIGHT "\x1b[999C\x1b[999B"
 
 /* ------------------------------- Declarations ------------------------------ */
@@ -20,8 +27,14 @@ void editor_process_keypress(void);
 /* ---------------------------------- Data ---------------------------------- */
 /* Editor state is global. */
 struct editor_config {
+    /* Cursor coordinates */
+    int cx;
+    int cy;
+
+    /* Window measurements */
     int rows;
     int cols;
+
     struct termios orig_term;
 };
 
@@ -30,8 +43,8 @@ struct editor_config E;
 /* -------------------------------- Terminal -------------------------------- */
 void error_handler(const char *s) {
     /* Clear screen and resposition cursor to top-left on error exit. */
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    write(STDOUT_FILENO, CLEAR_SCREEN, 4);
+    write(STDOUT_FILENO, CURSOR_REPOSITION, 3);
 
     perror(s);
     exit(1);
@@ -113,7 +126,7 @@ int get_cursor_position(int *rows, int *cols) {
     uint8_t i = 0;
     
     /* Request cursor position. */
-    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) {
+    if (write(STDOUT_FILENO, CURSOR_POSITION_REQUEST, 4) != 4) {
         return -1;
     }
     /* Read response into buffer: ESC [ Pn ; Pn R */
@@ -188,8 +201,8 @@ void editor_process_keypress(void) {
     switch(c) {
         case CTRL_KEY('q'):
             /* Clear screen and resposition cursor to top-left on exit. */
-            write(STDOUT_FILENO, "\x1b[2J", 4);
-            write(STDOUT_FILENO, "\x1b[H", 3);
+            write(STDOUT_FILENO, CLEAR_SCREEN, 4);
+            write(STDOUT_FILENO, CURSOR_REPOSITION, 3);
             exit(0);
             break;
         default:
@@ -249,18 +262,17 @@ void editor_refresh_screen(void) {
     struct abuf ab = ABUF_INIT;
 
     /* Hide cursor */
-    ab_append(&ab, "\x1b[?25l", 6);
+    ab_append(&ab, CURSOR_HIDE, 6);
 
-    /* Reposition curser to top-left corner of terminal 
-    H = Resposition cursor. Default args are 1;1 (first column, first row).
-    */
-    ab_append(&ab, "\x1b[H", 3);
-    /* Draw tildes at start of first 24 lines (terminal size TBD) and reposition cursor. */
+    /* Reposition curser to top-left corner of terminal. */
+    ab_append(&ab, CURSOR_REPOSITION, 3);
+
+    /* Draw tildes at start of first 24 lines (terminal size TBD) and reposition cursor back to top-left. */
     editor_draw_rows(&ab);
-    ab_append(&ab, "\x1b[H", 3);
+    ab_append(&ab, CURSOR_REPOSITION, 3);
 
     /* Show cursor */
-    ab_append(&ab, "\x1b[?25l", 6);
+    ab_append(&ab, CURSOR_SHOW, 6);
 
     write(STDOUT_FILENO, ab.str, ab.length);
     ab_free(&ab);
