@@ -3,7 +3,7 @@
 #include <errno.h> /* errno */
 #include <stdio.h> /* perror(), sscanf(), snprintf() */
 #include <stdlib.h> /* atexit(), exit(), realloc(), free() */
-#include <string.h> /* memcpy() */
+#include <string.h> /* memcpy(), strlen() */
 #include <sys/ioctl.h> /* ioctl() */
 #include <termios.h> /* tcgetattr(), tcsetattr() */
 #include <unistd.h> /* read(), write() */
@@ -16,9 +16,17 @@
 #define CLEAR_SCREEN "\x1b[2J"
 #define CURSOR_POSITION_REQUEST "\x1b[6n"
 #define CURSOR_REPOSITION "\x1b[H" /* Default args are 1;1 (first col, first row) --> top-left corner. */
+#define CURSOR_REPOSITION_COORDS "\x1b[%d;%dH"
 #define CURSOR_HIDE "\x1b[?25l"
 #define CURSOR_SHOW "\x1b[?25h"
 #define CURSOR_BOTTOM_RIGHT "\x1b[999C\x1b[999B"
+
+enum editor_key {
+    ARROW_LEFT = 1000,
+    ARROW_RIGHT = 1001,
+    ARROW_UP = 1002,
+    ARROW_DOWN = 1003
+};
 
 /* ------------------------------- Declarations ------------------------------ */
 void restore_term(void);
@@ -28,8 +36,8 @@ void editor_process_keypress(void);
 /* Editor state is global. */
 struct editor_config {
     /* Cursor coordinates */
-    int cx;
-    int cy;
+    int cx; /* col coordinate */
+    int cy; /* row coordinate */
 
     /* Window measurements */
     int rows;
@@ -109,16 +117,45 @@ void restore_term(void) {
     }
 }
 
-char editor_read_key(void) {
+int editor_read_key(void) {
     int ret;
     char c;
+    char escape_sequence[3] = "";
 
     while((ret = read(STDIN_FILENO, &c, 1)) != 1) {
         if (ret == -1 && errno != EAGAIN) {
             error_handler("read");
         }
+
     }
-    return c;
+    /* 
+    Check if c is an escape sequence. If so, read 2 more bytes. Check to see if we received an arrow key escape sequence.
+
+    escape_sequence[0]: '['
+    escape_sequence[1]: 'A' (or 'B', 'C', 'D')
+    escape_sequence[2]: '\0'
+    */
+    if (c == '\x1b') {
+        /* If reads time out, assume user pressed esc button. */
+        if (read(STDIN_FILENO, &escape_sequence[0], 1) != 1) {
+            return '\x1b';
+        }
+        if (read(STDIN_FILENO, &escape_sequence[1], 1) != 1) {
+            return '\x1b';
+        }
+
+        if (escape_sequence[0] == '[') {
+            switch(escape_sequence[1]) {
+                case ('A'): return ARROW_UP;
+                case ('B'): return ARROW_DOWN;
+                case ('C'): return ARROW_RIGHT;
+                case ('D'): return ARROW_LEFT;
+            }
+        }
+        return '\x1b'; /* If not an arrow key escape sequence, return esc for now. */
+    } else {
+        return c; /* Normal character condition. */
+    }
 }
 
 int get_cursor_position(int *rows, int *cols) {
@@ -195,8 +232,34 @@ void ab_free(struct abuf *ab) {
 
 /* ---------------------------------- Input --------------------------------- */
 
+void editor_move_cursor(int key) {
+    // idea: H = top, M = middle, L = bottom of screen
+    switch (key) {
+        case ARROW_LEFT: E.cx--; // left
+            break;
+        case ARROW_DOWN: E.cy++; // down
+            break;
+        case ARROW_UP: E.cy--; // up
+            break;
+        case ARROW_RIGHT: E.cx++; // right
+    }
+    /* Wrap-around if we hit boundary */
+    if (E.cx > E.cols - 1) {
+        E.cx = 0;
+        E.cy++;
+    } else if (E.cx < 0) {
+        E.cx = E.cols - 1;
+        E.cy--;
+    }
+    if (E.cy > E.rows - 1) {
+        E.cy = 0;
+    } else if (E.cy < 0) {
+        E.cy = E.rows - 1;
+    }
+}
+
 void editor_process_keypress(void) {
-    char c = editor_read_key();
+    int c = editor_read_key();
     /* CTRL key combination mapping */
     switch(c) {
         case CTRL_KEY('q'):
@@ -205,12 +268,10 @@ void editor_process_keypress(void) {
             write(STDOUT_FILENO, CURSOR_REPOSITION, 3);
             exit(0);
             break;
-        default:
-            if (iscntrl(c)) { /* Check if c is a control character (nonprintable character) */
-                printf("%d\r\n", c);
-            } else {
-                printf("%d ('%c')\r\n", c, c);
-            }
+        case ARROW_UP:
+        case ARROW_LEFT:
+        case ARROW_DOWN:
+        case ARROW_RIGHT: editor_move_cursor(c);
     }
 }
 
@@ -252,13 +313,15 @@ void editor_draw_rows(struct abuf *ab) {
         if (y < E.rows - 1) {
             ab_append(ab, "\r\n", 2);
        } else { // print debug info on last line 
-            debug_length = snprintf(debug, sizeof(debug), "E.rows = %d, E.cols = %d", E.rows, E.cols);
+            debug_length = snprintf(debug, sizeof(debug), "E.rows = %d, E.cols = %d, CURSOR COORDS = (%d, %d)", E.rows,
+                                    E.cols, E.cx, E.cy);
             ab_append(ab, debug, debug_length);
        }
     }
 }
 
 void editor_refresh_screen(void) {
+    char buff_cursor_position[32] = "";
     struct abuf ab = ABUF_INIT;
 
     /* Hide cursor */
@@ -267,9 +330,11 @@ void editor_refresh_screen(void) {
     /* Reposition curser to top-left corner of terminal. */
     ab_append(&ab, CURSOR_REPOSITION, 3);
 
-    /* Draw tildes at start of first 24 lines (terminal size TBD) and reposition cursor back to top-left. */
+    /* Draw rows and display current cursor coordinates. */
     editor_draw_rows(&ab);
-    ab_append(&ab, CURSOR_REPOSITION, 3);
+    /* Terminal uses 1-indexed values. */
+    snprintf(buff_cursor_position, sizeof(buff_cursor_position), CURSOR_REPOSITION_COORDS, E.cy + 1, E.cx + 1);
+    ab_append(&ab, buff_cursor_position, sizeof(buff_cursor_position));
 
     /* Show cursor */
     ab_append(&ab, CURSOR_SHOW, 6);
@@ -281,6 +346,10 @@ void editor_refresh_screen(void) {
 /* ---------------------------------- Init ---------------------------------- */
 /* Initialize fields in E struct (global editor state). */
 void init_editor(void) {
+    /* Cursor starts at top-left corner. */
+    E.cx = 0;
+    E.cy = 0;
+
     if (get_window_size(&E.rows, &E.cols) == -1) {
         error_handler("get_window_size");
     }
@@ -289,7 +358,7 @@ void init_editor(void) {
 int main(void) {
     init_term();
     init_editor();
-    while(1) {
+    while(1) { // loops with each keypress
         editor_refresh_screen();
         editor_process_keypress();
     }
