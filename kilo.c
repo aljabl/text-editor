@@ -235,27 +235,43 @@ void ab_free(struct abuf *ab) {
 void editor_move_cursor(int key) {
     // idea: H = top, M = middle, L = bottom of screen
     switch (key) {
-        case ARROW_LEFT: E.cx--; // left
+        case ARROW_LEFT:
+            if (E.cx <= 0) { /* Wrap to end of above row if we hit left boundary. */
+                E.cx = E.cols - 1;
+                E.cy--;
+                if (E.cy < 0) {
+                    E.cy = 0;
+                }
+            } else {
+                E.cx--; // left
+            }
             break;
-        case ARROW_DOWN: E.cy++; // down
+        case ARROW_DOWN:
+            if (E.cy >= E.rows - 1) { /* Wrap to first row if we hit bottom boundary. */
+                E.cy = 0;
+            } else {
+                E.cy++; // down
+            }
             break;
-        case ARROW_UP: E.cy--; // up
+        case ARROW_UP:
+            if (E.cy <= 0) { /* Wrap to bottom row if we hit top boundary. */
+                E.cy = E.rows - 1;
+            } else {
+                E.cy--; // up
+            }
             break;
-        case ARROW_RIGHT: E.cx++; // right
+        case ARROW_RIGHT:
+            if (E.cx >= E.cols - 1) { /* Wrap to top of below row if we hit right boundary. */
+                E.cx = 0;
+                E.cy++;
+                if (E.cy > E.rows - 1) {
+                    E.cy = E.rows - 1;
+                }
+            } else {
+                E.cx++; // right
+            }
     }
-    /* Wrap-around if we hit boundary */
-    if (E.cx > E.cols - 1) {
-        E.cx = 0;
-        E.cy++;
-    } else if (E.cx < 0) {
-        E.cx = E.cols - 1;
-        E.cy--;
-    }
-    if (E.cy > E.rows - 1) {
-        E.cy = 0;
-    } else if (E.cy < 0) {
-        E.cy = E.rows - 1;
-    }
+
 }
 
 void editor_process_keypress(void) {
