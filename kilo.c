@@ -27,7 +27,9 @@ enum editor_key {
     ARROW_UP = 1002,
     ARROW_DOWN = 1003,
     PAGE_UP, /* <esc>[5~ */
-    PAGE_DOWN /* <esc>[6~ */
+    PAGE_DOWN, /* <esc>[6~ */
+    HOME, /* <esc>[1~, <esc>[7~, <esc>[H, or <esc>OH */
+    END /* <esc>[4~, <esc>[8~, <esc>[F, or <esc>OF */
 };
 
 /* ------------------------------- Declarations ------------------------------ */
@@ -147,26 +149,38 @@ int editor_read_key(void) {
         }
 
         if (escape_sequence[0] == '[') {
-            /* Page up; Page down */
+            /* Esc seqs with <esc>[1...9~ */
             if (escape_sequence[1] >= '0' && escape_sequence[1] <= '9') {
                 if (read(STDIN_FILENO, &escape_sequence[2], 1) != 1) {
                     return '\x1b';
                 }
                 if (escape_sequence[2] == '~') {
                     switch(escape_sequence[2]) {
+                        case ('1'): return HOME;
+                        case ('4'): return END;
                         case ('5'): return PAGE_UP;
                         case ('6'): return PAGE_DOWN;
+                        case ('7'): return HOME;
+                        case ('8'): return END;
                     }
                 }
             }
-            /* Arrow keys */
+            /* Esc seqs with <esc>[A...F*/
             else { 
                 switch(escape_sequence[1]) {
                 case ('A'): return ARROW_UP;
                 case ('B'): return ARROW_DOWN;
                 case ('C'): return ARROW_RIGHT;
                 case ('D'): return ARROW_LEFT;
+                case ('H'): return HOME;
+                case ('F'): return END;
                 }
+            }
+        /* Esc seqs with <esc>OH;F*/
+        } else if (escape_sequence[0] == 'O') {
+            switch (escape_sequence[1]) {
+                case ('H'): return HOME;
+                case ('F'): return END;
             }
         }
         return '\x1b'; /* If not an arrow key escape sequence, return esc for now. */
@@ -300,6 +314,13 @@ void editor_process_keypress(void) {
             write(STDOUT_FILENO, CLEAR_SCREEN, 4);
             write(STDOUT_FILENO, CURSOR_REPOSITION, 3);
             exit(0);
+            break;
+
+        case HOME:
+            E.cx = 0; /* Move to start of line */
+            break;
+        case END:
+            E.cx = E.cols - 1; /* Move to end of line */
             break;
 
         case PAGE_UP:
