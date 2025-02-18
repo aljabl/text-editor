@@ -25,7 +25,9 @@ enum editor_key {
     ARROW_LEFT = 1000,
     ARROW_RIGHT = 1001,
     ARROW_UP = 1002,
-    ARROW_DOWN = 1003
+    ARROW_DOWN = 1003,
+    PAGE_UP, /* <esc>[5~ */
+    PAGE_DOWN /* <esc>[6~ */
 };
 
 /* ------------------------------- Declarations ------------------------------ */
@@ -145,11 +147,26 @@ int editor_read_key(void) {
         }
 
         if (escape_sequence[0] == '[') {
-            switch(escape_sequence[1]) {
+            /* Page up; Page down */
+            if (escape_sequence[1] >= '0' && escape_sequence[1] <= '9') {
+                if (read(STDIN_FILENO, &escape_sequence[2], 1) != 1) {
+                    return '\x1b';
+                }
+                if (escape_sequence[2] == '~') {
+                    switch(escape_sequence[2]) {
+                        case ('5'): return PAGE_UP;
+                        case ('6'): return PAGE_DOWN;
+                    }
+                }
+            }
+            /* Arrow keys */
+            else { 
+                switch(escape_sequence[1]) {
                 case ('A'): return ARROW_UP;
                 case ('B'): return ARROW_DOWN;
                 case ('C'): return ARROW_RIGHT;
                 case ('D'): return ARROW_LEFT;
+                }
             }
         }
         return '\x1b'; /* If not an arrow key escape sequence, return esc for now. */
@@ -284,6 +301,17 @@ void editor_process_keypress(void) {
             write(STDOUT_FILENO, CURSOR_REPOSITION, 3);
             exit(0);
             break;
+
+        case PAGE_UP:
+        case PAGE_DOWN:
+        {
+            uint16_t times = E.rows;
+            while (times--) {
+                editor_move_cursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
+            }
+        }
+            break;
+
         case ARROW_UP:
         case ARROW_LEFT:
         case ARROW_DOWN:
