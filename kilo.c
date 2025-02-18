@@ -29,7 +29,8 @@ enum editor_key {
     PAGE_UP, /* <esc>[5~ */
     PAGE_DOWN, /* <esc>[6~ */
     HOME, /* <esc>[1~, <esc>[7~, <esc>[H, or <esc>OH */
-    END /* <esc>[4~, <esc>[8~, <esc>[F, or <esc>OF */
+    END, /* <esc>[4~, <esc>[8~, <esc>[F, or <esc>OF */
+    DELETE /* <esc[3~ */
 };
 
 /* ------------------------------- Declarations ------------------------------ */
@@ -157,6 +158,7 @@ int editor_read_key(void) {
                 if (escape_sequence[2] == '~') {
                     switch(escape_sequence[2]) {
                         case ('1'): return HOME;
+                        case ('3'): return DELETE;
                         case ('4'): return END;
                         case ('5'): return PAGE_UP;
                         case ('6'): return PAGE_DOWN;
